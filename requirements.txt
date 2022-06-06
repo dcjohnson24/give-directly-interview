@@ -5,3 +5,4 @@ ipython==8.4.0
 flake8==4.0.1
 PyQt5==5.15.6
 statsmodels==0.13.2
+ipykernel==6.13.0
