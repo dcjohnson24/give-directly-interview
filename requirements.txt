@@ -2,3 +2,6 @@ pandas==1.4.2
 jupyterlab==3.4.2
 matplotlib==3.5.2
 ipython==8.4.0
+flake8==4.0.1
+PyQt5==5.15.6
+statsmodels==0.13.2
