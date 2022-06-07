@@ -1,12 +1,17 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib
+from sklearn.preprocessing import LabelEncoder
 matplotlib.use('QtAgg')
 
+from statsmodels.stats.weightstats import CompareMeans
 import statsmodels.formula.api as smf
 import missingno as msno
 from sklearn.impute import SimpleImputer
-
+from sklearn.linear_model import LogisticRegressionCV
+from sklearn.ensemble import ExtraTreesClassifier
+from sklearn.model_selection import train_test_split
+from collections import defaultdict
 
 if __name__ == '__main__':
     recipients = pd.read_csv('recipients.csv')
@@ -75,8 +80,7 @@ if __name__ == '__main__':
         print(merged[i].value_counts(dropna=False))
     # To deal with these problematic cases, I replace them with
     # the county median.
-    merged.age = merged.groupby('county')['age'].transform(
-        lambda x: x.fillna(x.median()))
+
     merged.age[merged.age == 9999] = merged.groupby('county')['age'].transform(
         lambda x: x.median()
     )
@@ -84,9 +88,6 @@ if __name__ == '__main__':
         .groupby('county')['time_county'] \
         .transform(lambda x: x.median())
 
-    merged.time_county = merged.groupby('county')['time_county'].transform(
-        lambda x: x.fillna(x.median())
-    )
     # merged = merged[merged['age'] <= 200]
     # merged = merged[merged['time_county'] > 0]
 
@@ -109,6 +110,7 @@ if __name__ == '__main__':
     plt.show()
     plt.clf()
     plt.close()
+
     # To investigate this, let's look at recipients with a missing age
     county_missing = merged.loc[merged.county.isna()]
     age_missing = merged.loc[merged.age.isna()]
@@ -124,7 +126,13 @@ if __name__ == '__main__':
     # merged.county = imp.fit_transform(merged.county.values.reshape(-1, 1))
     merged[['county', 'account_status']] = imp.fit_transform(merged[['county', 'account_status']])
 
-    import pdb; pdb.set_trace()
+    merged.age = merged.groupby('county')['age'].transform(
+        lambda x: x.fillna(x.median()))
+
+    merged.time_county = merged.groupby('county')['time_county'].transform(
+        lambda x: x.fillna(x.median())
+    )
+    # import pdb; pdb.set_trace()
     
     # 2 Who to focus on?
     # By construction, the starting group has no successful surveys. The 
@@ -189,3 +197,55 @@ if __name__ == '__main__':
 
     another_logit = smf.logit('one_success ~ account_status', data=merged).fit()
     # account status is not a significant predictor.
+
+    # Compute feature importance
+    # https://towardsdatascience.com/feature-selection-with-pandas-e3690ad8504b
+    reg = LogisticRegressionCV()
+    cat_cols = ['month', 'account_status', 'county']
+    num_cols = ['age', 'time_county']
+    d = defaultdict(LabelEncoder)
+    le_fit = merged[cat_cols].apply(lambda x: d[x.name].fit_transform(x))
+    X = pd.concat((merged[num_cols], le_fit), axis=1)
+    y = merged['one_success']
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.3, random_state=42
+    )
+
+    reg.fit(X_train, y_train)
+    # print("Best alpha using built-in LogisticRegCV: %f" % reg.alpha_)
+    print("Best score using built-in LogisticRegCV: %f" % reg.score(X_test, y_test))
+    coef = pd.Series(reg.coef_.flatten(), index=X.columns)
+    imp_coef = coef.sort_values()
+    # import matplotlib
+    # matplotlib.rcParams['figure.figsize'] = (8.0, 10.0)
+    imp_coef.plot(kind="barh")
+    plt.title("Feature importance using Logistic Regression Model")
+    plt.tight_layout()
+    plt.show()
+
+    # It appears that the account_status has the largest effect on whether a survey is successful.
+    # Age and month are discarded. Recall that account_status and age are correlated however.
+    merged.groupby('account_status')['age'].mean()
+    # The Not active accounts are slightly older.
+    # Run a test for the equality of means. The null hypothesis is that the means are equal.
+    active_age = merged.age[merged.account_status == 'Active']
+    notactive_age = merged.age[merged.account_status == 'Not Active']
+    CompareMeans.from_data(active_age, notactive_age).ttest_ind()
+    # The p-value is close to zero, rejecting the null hypothesis that the means of the two groups are equal.
+
+    # Let's compare these results with those from a Tree based model
+    reg_extra_tree = ExtraTreesClassifier(n_estimators=10)
+    reg_extra_tree.fit(X_train, y_train)
+    feat_imp = pd.Series(
+        reg_extra_tree.feature_importances_,
+        index=X.columns
+    ).sort_values()
+    print(f"Mean accuracy on test data is {reg_extra_tree.score(X_test, y_test)}")
+    feat_imp.plot(kind="barh")
+    plt.title("Feature importance using Extra Tree Classifier")
+    plt.tight_layout()
+    plt.show()
+    # This time the model has age as the most important effect. All the effects are chosen by the
+    # model, however. Note that there is randomness in the model, so sometimes some features
+    # will be ranked differently. But the model will still usually choose all of the features for
+    # prediction.
