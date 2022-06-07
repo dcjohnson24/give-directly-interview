@@ -4,12 +4,15 @@ import matplotlib
 matplotlib.use('QtAgg')
 
 import statsmodels.formula.api as smf
+import missingno as msno
+from sklearn.impute import SimpleImputer
 
 
 if __name__ == '__main__':
     recipients = pd.read_csv('recipients.csv')
     attempts = pd.read_csv('survey_attempts.csv')
-    merged = pd.merge(recipients, attempts, on='recipient_id', how='left', indicator=True)
+    merged = pd.merge(recipients, attempts, on='recipient_id',
+                      how='left', indicator=True)
     merged._merge.value_counts(dropna=False)
 
     # It appears that all the recipients have had some survey attempt. We can drop the _merge
@@ -25,36 +28,37 @@ if __name__ == '__main__':
     one_success = [mask.index[i] for i, m in enumerate(mask) if m]
     # # Set the value to start for those with no successful surveys. '~' negates the value 
     # # of the mask. In this case, ~mask means find those without any successful survey
-    merged.loc[~merged.recipient_id.isin(one_success), 'stage'] = 'Start'  
+    merged.loc[~merged.recipient_id.isin(one_success), 'stage'] = 'Start' 
     # Find Ineligible respondents
-    
+
     # Remove the text 'County' from the column
     merged.county = merged.county.str.replace('County ', '', regex=False)
     inABC = merged.county.isin(['A', 'B', 'C'])
     recipient_noABC = merged.recipient_id[~inABC]
 
-    merged.loc[merged.recipient_id.isin(one_success) & merged.recipient_id.isin(recipient_noABC), 'stage'] = 'Ineligible'
+    merged.loc[merged.recipient_id.isin(one_success) &
+               merged.recipient_id.isin(recipient_noABC),
+               'stage'] = 'Ineligible'
 
     # Find Review status
     recipient_yesABC = merged.recipient_id[inABC]
     notActive = merged.account_status == 'Not Active'
     recipient_notActive = merged.recipient_id[notActive]
 
-    merged.loc[merged.recipient_id.isin(one_success) & 
-        merged.recipient_id.isin(recipient_yesABC) & 
-        merged.recipient_id.isin(recipient_notActive), 'stage'] = 'Review'
-
+    merged.loc[merged.recipient_id.isin(one_success) &
+               merged.recipient_id.isin(recipient_yesABC) &
+               merged.recipient_id.isin(recipient_notActive),
+               'stage'] = 'Review'
 
     # Find Pay status
     active = merged.account_status == 'Active'
     recipient_active = merged.recipient_id[active]
-    merged.loc[merged.recipient_id.isin(one_success) & 
-        merged.recipient_id.isin(recipient_yesABC) & 
-        merged.recipient_id.isin(recipient_active), 'stage'] = 'Pay'
-    
+    merged.loc[merged.recipient_id.isin(one_success) &
+               merged.recipient_id.isin(recipient_yesABC) &
+               merged.recipient_id.isin(recipient_active), 'stage'] = 'Pay'
+
     # There are 6 respondents without an account status. We could assign these to not Active
     # but it is important to follow up with a field team for this answer.
-
 
     # How many recipients in each stage?
     merged.stage.value_counts(dropna=False)
@@ -69,16 +73,63 @@ if __name__ == '__main__':
     # minimum time in county is negative. Max age is 9999
     for i in merged.columns:
         print(merged[i].value_counts(dropna=False))
-    # To deal with these problematic cases, I drop them from the data for analysis
-    # Also drop the NaN
-    merged = merged[merged['age'] <= 200]
-    merged = merged[merged['time_county'] > 0]
+    # To deal with these problematic cases, I replace them with
+    # the county median.
+    merged.age = merged.groupby('county')['age'].transform(
+        lambda x: x.fillna(x.median()))
+    merged.age[merged.age == 9999] = merged.groupby('county')['age'].transform(
+        lambda x: x.median()
+    )
+    merged.time_county[merged.time_county < 0] = merged \
+        .groupby('county')['time_county'] \
+        .transform(lambda x: x.median())
 
-    merged.isna().sum() # Check with field teams or relevant departments to resolve these issues
+    merged.time_county = merged.groupby('county')['time_county'].transform(
+        lambda x: x.fillna(x.median())
+    )
+    # merged = merged[merged['age'] <= 200]
+    # merged = merged[merged['time_county'] > 0]
 
+    merged.isna().sum()  # Check with field teams or relevant departments to resolve these issues
+
+    # TODO add missingno package
+    # There are some missing values in 
+
+    msno.matrix(merged)
+    plt.tight_layout()
+    plt.show()
+    plt.clf()
+
+    # We can see there is a correlation between account_number and account_status being missing,
+    # This would make sense considering that someone without an account number wouldn't have 
+    # a status and vice versa. There is a perfect association between age and county missingness.
+
+    msno.heatmap(merged, cmap='rainbow')
+    plt.tight_layout()
+    plt.show()
+    plt.clf()
+    plt.close()
+    # To investigate this, let's look at recipients with a missing age
+    county_missing = merged.loc[merged.county.isna()]
+    age_missing = merged.loc[merged.age.isna()]
+    county_missing.equals(age_missing)
+
+    # So age is missing exactly when county is missing. There are two 
+    # recipients that did not fill in these questions for multiple survey attempts. 
+    # They may have been uncomfortable sharing that information.
+    county_missing.recipient_id.nunique()
+
+    # Impute the missing values
+    imp = SimpleImputer(strategy='most_frequent')
+    # merged.county = imp.fit_transform(merged.county.values.reshape(-1, 1))
+    merged[['county', 'account_status']] = imp.fit_transform(merged[['county', 'account_status']])
+
+    import pdb; pdb.set_trace()
+    
     # 2 Who to focus on?
-    # By construction, the starting group has no successful surveys. The review group has at least one
-    # successful survey per person. It would be good to know what the chance of someone moving from
+    # By construction, the starting group has no successful surveys. The 
+    # review group has at least one successful survey per person. 
+    # It would be good to know what the chance of someone moving from
     # the review stage to a pay stage at a later date. 
 
     (merged.groupby('recipient_id')['stage'].nunique() > 1).sum()
@@ -93,7 +144,7 @@ if __name__ == '__main__':
     # Review group. It would be good to check this with historical data on the conversion success rate.
     # Data on the cost of converting the Start group vs the Review group would also be helpful
     # for the decision.
-    merged.stage.value_counts(dropna=False)      
+    merged.stage.value_counts(dropna=False)    
 
     # 3.1
     # Graph the relationship between age and at least one successful survey
@@ -111,7 +162,7 @@ if __name__ == '__main__':
     plt.xlabel('Age Group')
     plt.ylabel('% of recipients with at least\n one successful survey')
     plt.show()
-
+    plt.close()
     # TODO logistic regression of age and one_success
     logit = smf.logit('one_success ~ age', data=merged).fit()
     print(logit.summary())
@@ -120,7 +171,7 @@ if __name__ == '__main__':
             'Lower CI': logit.conf_int()[0],
             'Upper CI': logit.conf_int()[1]
         })
-    
+
     odds_ratios = pd.np.exp(odds_ratios)
 
     odds_ratios['OR'][1] - 1
