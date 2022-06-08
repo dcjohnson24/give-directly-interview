@@ -7,9 +7,10 @@ matplotlib.use('QtAgg')
 from statsmodels.stats.weightstats import CompareMeans
 import statsmodels.formula.api as smf
 import missingno as msno
-from sklearn.impute import SimpleImputer
+from sklearn.experimental import enable_iterative_imputer
+from sklearn.impute import IterativeImputer
 from sklearn.linear_model import LogisticRegressionCV
-from sklearn.ensemble import ExtraTreesClassifier
+from sklearn.ensemble import ExtraTreesClassifier, ExtraTreesRegressor
 from sklearn.model_selection import train_test_split
 from collections import defaultdict
 
@@ -78,15 +79,12 @@ if __name__ == '__main__':
     # minimum time in county is negative. Max age is 9999
     for i in merged.columns:
         print(merged[i].value_counts(dropna=False))
-    # To deal with these problematic cases, I replace them with
-    # the county median.
+    # To deal with these problematic cases, I replace them with missing values to be
+    # imputed later.
 
-    merged.age[merged.age == 9999] = merged.groupby('county')['age'].transform(
-        lambda x: x.median()
-    )
-    merged.time_county[merged.time_county < 0] = merged \
-        .groupby('county')['time_county'] \
-        .transform(lambda x: x.median())
+    merged.age[merged.age == 9999] = pd.np.nan 
+
+    merged.time_county[merged.time_county < 0] = pd.np.nan
 
     # merged = merged[merged['age'] <= 200]
     # merged = merged[merged['time_county'] > 0]
@@ -122,17 +120,38 @@ if __name__ == '__main__':
     county_missing.recipient_id.nunique()
 
     # Impute the missing values
-    imp = SimpleImputer(strategy='most_frequent')
-    # merged.county = imp.fit_transform(merged.county.values.reshape(-1, 1))
-    merged[['county', 'account_status']] = imp.fit_transform(merged[['county', 'account_status']])
+    cat_cols_na = ['account_status', 'county']
+    num_cols_na = ['age', 'time_county']
 
-    merged.age = merged.groupby('county')['age'].transform(
-        lambda x: x.fillna(x.median()))
-
-    merged.time_county = merged.groupby('county')['time_county'].transform(
-        lambda x: x.fillna(x.median())
+    merged[cat_cols_na] = merged[cat_cols_na].astype('category')
+    d_na = {col: {n: cat for n, cat in enumerate(merged[col].cat.categories)}
+            for col in cat_cols_na}
+    merged[cat_cols_na] = pd.DataFrame(
+        {col: merged[col].cat.codes for col in cat_cols_na},
+        index=merged.index
     )
-    # import pdb; pdb.set_trace()
+
+    imp_num = IterativeImputer(estimator=ExtraTreesRegressor(),
+                               initial_strategy='median',
+                               max_iter=10, random_state=0)
+    imp_cat = IterativeImputer(estimator=ExtraTreesClassifier(),
+                               initial_strategy='most_frequent',
+                               max_iter=10, random_state=0, missing_values=-1)
+    # merged.county = imp.fit_transform(merged.county.values.reshape(-1, 1))
+    merged[num_cols_na] = imp_num.fit_transform(merged[num_cols_na])
+    merged[cat_cols_na] = imp_cat.fit_transform(merged[cat_cols_na])
+    # Now retrieve the original labels.
+    for col in cat_cols_na:
+        merged[col].replace(d_na[col], inplace=True)
+
+    # merged[['county', 'account_status']] = imp.fit_transform(merged[['county', 'account_status']])
+
+    # merged.age = merged.groupby('county')['age'].transform(
+    #     lambda x: x.fillna(x.median()))
+
+    # merged.time_county = merged.groupby('county')['time_county'].transform(
+    #     lambda x: x.fillna(x.median())
+    # )
     
     # 2 Who to focus on?
     # By construction, the starting group has no successful surveys. The 
