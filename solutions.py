@@ -1,7 +1,7 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 matplotlib.use('QtAgg')
 
 from statsmodels.stats.weightstats import CompareMeans
@@ -224,10 +224,17 @@ if __name__ == '__main__':
     num_cols = ['age', 'time_county']
     d = defaultdict(LabelEncoder)
     le_fit = merged[cat_cols].apply(lambda x: d[x.name].fit_transform(x))
+
+    # Add a StandardScaler before computing feature importance
+    scaler = StandardScaler()
+
     X = pd.concat((merged[num_cols], le_fit), axis=1)
     y = merged['one_success']
+
+    X_scaled = scaler.fit_transform(X)
+
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.3, random_state=42
+        X_scaled, y, test_size=0.3, random_state=42
     )
 
     reg.fit(X_train, y_train)
@@ -242,8 +249,8 @@ if __name__ == '__main__':
     plt.tight_layout()
     plt.show()
 
-    # It appears that the account_status has the largest effect on whether a survey is successful.
-    # Age and month are discarded. Recall that account_status and age are correlated however.
+    # It appears that the account_status and age have the largest effect on whether a survey is successful.
+    # Age has a negative effect however. Recall that account_status and age are correlated. 
     merged.groupby('account_status')['age'].mean()
     # The Not active accounts are slightly older.
     # Run a test for the equality of means. The null hypothesis is that the means are equal.
