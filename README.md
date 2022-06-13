@@ -6,7 +6,7 @@ Create a virtual envrionment with `python3 -m venv .venv`. Activate the virtual 
 `solutions.py` and `give-directly-assessment.ipynb` are roughly the same. Run `solutions.py` from the command line with `python solutions.py`. 
 
 ```
-user@user:~/give-directly-exercise$ python solutions.py -h
+user@user:~/give-directly-interview$ python solutions.py -h
 
 usage: solutions.py [-h] [--show_plots]
 
